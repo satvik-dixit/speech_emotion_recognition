@@ -1,53 +1,61 @@
-import torch
-from glob import glob
 import os
+import numpy as np
+from tqdm import tqdm
+from glob import glob
+from random import sample
+
 import librosa
 import soundfile as sf
-import numpy as np
-from sklearn import preprocessing
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import LogisticRegression
-from random import sample
-from tqdm import tqdm
-import serab_byols
-import opensmile
-from transformers import Wav2Vec2Model, HubertModel
-from sklearn.preprocessing import StandardScaler
-scaler = StandardScaler()
 
+import torch
+import opensmile
+import serab_byols
+from transformers import Wav2Vec2Model, HubertModel
+
+from sklearn.svm import SVC
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.model_selection import GridSearchCV, train_test_split
+
+
+
+# Defining a function for loading and resampling audio files
 
 def load_audio_files(audio_files, resampling_frequency=16000, audio_list=None):
-    '''
-    Loads and resamples audio files 
-    
-    Parameters
-    ------------
-    audio_files: string
-        The paths of the wav files 
-    resampling_frequency: integer
-        The frequency which all audios will be resampled to
-    audio_list: list of torch arrays of audios to which more audios need too be added, empty by default
+  '''
+  Loads and resamples audio files 
+  
+  Parameters
+  ------------
+  audio_files: string
+      The paths of the wav files 
+  resampling_frequency: integer
+      The frequency which all audios will be resampled to
+  audio_list: list 
+      The list of torch tensors of audios to which more audios need too be added, empty by default
 
-    Returns
-    ------------
-    audio_list: list of torch arrays
-        A list of torch arrays, one array for each audio file
-        
-    '''
+  Returns
+  ------------
+  audio_list: list
+      A list of torch tensors, one array for each audio file
 
-    # Making audio_list
-    if audio_list is None:
-      audio_list = []
+  '''
+  # Making audio_list
+  if audio_list is None:
+    audio_list = []
 
-    # Resampling
-    for audio in audio_files:
-        signal, fs = librosa.load(audio, sr=resampling_frequency)
-        audio_list.append(torch.from_numpy(signal))
+  # Resampling
+  for audio in audio_files:
+    signal, fs = librosa.load(audio, sr=resampling_frequency)
+    audio_list.append(torch.from_numpy(signal))
+      
+  return audio_list
 
-    return audio_list
 
+
+# Defining a function for generating audio embedding extraction models
 
 def audio_embeddings_model(model_name):
   '''
@@ -56,29 +64,38 @@ def audio_embeddings_model(model_name):
   Parameters
   ------------
   mode_name: string
-      The model to used, could be 'wav2vec', 'hubert' or 'hybrid_byols'
+      The model to used, could be 'wav2vec', 'hubert', 'hybrid_byols', 'compare' or 'egemaps'
 
   Returns
   ------------
   model: object
-
+      The embedding extraction model
   '''
-  if model_name == 'wav2vec2':
+  if model_name=='wav2vec2':
     model_hub = 'facebook/wav2vec2-large-960h-lv60-self'
     model = Wav2Vec2Model.from_pretrained(model_hub)
-  elif model_name == 'hubert':
+  elif model_name=='hubert':
     model_hub = 'facebook/hubert-xlarge-ll60k'
     model = HubertModel.from_pretrained(model_hub)
-  elif model_name == 'hybrid_byols':
+  elif model_name=='hybrid_byols':
     model_name = 'cvt'
     checkpoint_path = "serab-byols/checkpoints/cvt_s1-d1-e64_s2-d1-e256_s3-d1-e512_BYOLAs64x96-osandbyolaloss6373-e100-bs256-lr0003-rs42.pth"
     model = serab_byols.load_model(checkpoint_path, model_name)
-  elif model_name == 'compare':
-    model = opensmile.Smile(feature_set=opensmile.FeatureSet.ComParE_2016, feature_level=opensmile.FeatureLevel.Functionals)
-  elif model_name == 'egemaps':
-    model = opensmile.Smile(feature_set=opensmile.FeatureSet.eGeMAPSv02, feature_level=opensmile.FeatureLevel.Functionals)
+  elif model_name=='compare':
+    model = opensmile.Smile(
+        feature_set=opensmile.FeatureSet.ComParE_2016,
+        feature_level=opensmile.FeatureLevel.Functionals,
+    )
+  elif model_name=='egemaps':
+    model = opensmile.Smile(
+        feature_set=opensmile.FeatureSet.eGeMAPSv02,
+        feature_level=opensmile.FeatureLevel.Functionals,
+    )
   return model
 
+
+
+# Defining a function for embedding exctraction from the audio list
 
 def audio_embeddings(audio_list, model_name, model, sampling_rate=16000):
   '''
@@ -86,37 +103,38 @@ def audio_embeddings(audio_list, model_name, model, sampling_rate=16000):
   
   Parameters
   ------------
-  audio_list: list of arrays
+  audio_list: list
       A list of arrays, one array for each audio file
   model_name: string
-      The model to used, could be 'wav2vec', 'hubert' or 'hybrid_byols'
+      The model to used, could be 'wav2vec', 'hubert', 'hybrid_byols', 'compare' or 'egemaps'
   model: object
-      The model generated by audio_embeddings_model function
+      The embedding extraction model generated by audio_embeddings_model function
   n_feats: int
       The number of features of each audio file, 6373 for 'compare' and 88 for 'egemaps'
 
   Returns
   ------------
-  embeddings_array: torch array
+  embeddings_array: array
       The array containg embeddings of all audio_files, dimension (number of audio files × n_feats)
       
   '''
-  if model_name == 'hybrid_byols':
+  if model_name=='hybrid_byols':
     embeddings_array = serab_byols.get_scene_embeddings(audio_list, model)
   else:
     embeddings_list = []
     for i in tqdm(range(len(audio_list))):
-      if model_name == 'wav2vec2' or model_name == 'hubert':
-        embeddings = model(audio_list[i].reshape(
-            1, -1)).last_hidden_state.mean(1)
+      if model_name=='wav2vec2' or model_name=='hubert':
+        embeddings = model(audio_list[i].reshape(1,-1)).last_hidden_state.mean(1)
         embeddings_list.append(embeddings[0])
-      elif model_name == 'compare' or model_name == 'egemaps':
+      elif model_name=='compare' or model_name=='egemaps':
         embeddings = model.process_signal(audio_list[i], sampling_rate)
-        embeddings_list.append(torch.tensor(
-            embeddings.values[0], dtype=torch.float32))
+        embeddings_list.append(torch.tensor(embeddings.values[0], dtype=torch.float32))
     embeddings_array = torch.stack(embeddings_list)
   return embeddings_array
 
+
+
+# Defining a function for speaker normalisation using standard scaler
 
 def speaker_normalisation(embeddings_array, speakers):
   '''
@@ -124,39 +142,42 @@ def speaker_normalisation(embeddings_array, speakers):
   
   Parameters
   ------------
-  embeddings_array: torch tensor
-      The tensor of embeddings, one row for each audio file
-  speakers: list of integers
+  embeddings_array: array
+      The array of embeddings, one row for each audio file
+  speakers: list 
       The list of speakers
 
   Returns
   ------------
-  embeddings_array: torch tensor
-      The tensor containg normalised embeddings 
+  embeddings_array: array
+      The array containg normalised embeddings of all audio_files, dimension (number of audio files × n_feats)
       
   '''
   speaker_ids = set(speakers)
   for speaker_id in speaker_ids:
-    speaker_embeddings_indices = np.where(np.array(speakers) == speaker_id)[0]
-    speaker_embeddings = embeddings_array[speaker_embeddings_indices, :]
+    speaker_embeddings_indices = np.where(np.array(speakers)==speaker_id)[0]
+    speaker_embeddings = embeddings_array[speaker_embeddings_indices,:]
+    scaler = StandardScaler()
     normalised_speaker_embeddings = scaler.fit_transform(speaker_embeddings)
-    embeddings_array[speaker_embeddings_indices] = torch.tensor(
-        normalised_speaker_embeddings).float()
+    embeddings_array[speaker_embeddings_indices] = torch.tensor(normalised_speaker_embeddings).float()
   return embeddings_array
 
 
-def split_train_test(normalised_embeddings_array, labels, speakers, test_size=0.30):
+
+# Defining a function for splitting into train set and test set with diferent speakers in each set
+
+def split_train_test(normalised_embeddings_array, labels, speakers, test_size = 0.30):
   '''
   Splits into training and testing set with different speakers
-  
+
   Parameters
   ------------
   normalised_embeddings_array: torch tensor
-      The tensor containing normalised embeddings 
+    The tensor containing normalised embeddings 
   labels: list of strings
-      The list of emotions corresponding to audio files
-  speakers: list of integers 
-      The list of speakers
+    The list of emotions corresponding to audio files
+  speakers: list 
+    The list of speakers
 
   Returns
   ------------
@@ -164,25 +185,27 @@ def split_train_test(normalised_embeddings_array, labels, speakers, test_size=0.
     The normalised embeddings that will be used for training
   X_test: torch tensor
     The normalised embeddings that will be used for testing
-  y_train: list of strings
-    The labels that will be used for training
-  y_test: list of strings
-    The labels that will be used for testing
+  y_train: list
+   The labels that will be used for training
+  y_test: list
+   The labels that will be used for testing
+
   '''
-  
+  # unique speakers in this dataset
   all_speakers = set(speakers)
+  # unique speakers in test set
   test_speakers = sample(all_speakers, int(test_size*len(all_speakers)))
 
   test_speakers_indices = []
   train_speakers_indices = []
 
   for speaker in all_speakers:
-    if speaker in test_speakers:
-      speaker_indices = np.where(np.array(speakers) == speaker)[0]
-      test_speakers_indices.extend(speaker_indices)
-    else:
-      speaker_indices = np.where(np.array(speakers) == speaker)[0]
-      train_speakers_indices.extend(speaker_indices)
+      if speaker in test_speakers:
+          speaker_indices = np.where(np.array(speakers)==speaker)[0]
+          test_speakers_indices.extend(speaker_indices)
+      else:
+          speaker_indices = np.where(np.array(speakers)==speaker)[0]
+          train_speakers_indices.extend(speaker_indices)
 
   X_train = normalised_embeddings_array[train_speakers_indices]
   X_test = normalised_embeddings_array[test_speakers_indices]
@@ -190,9 +213,44 @@ def split_train_test(normalised_embeddings_array, labels, speakers, test_size=0.
   y_train = [0 for i in range(len(train_speakers_indices))]
   y_test = [0 for i in range(len(test_speakers_indices))]
 
-  for i, index in enumerate(train_speakers_indices):
-    y_train[i] = labels[index]
-  for i, index in enumerate(test_speakers_indices):
-    y_test[i] = labels[index]
+  for i,index in enumerate(train_speakers_indices):
+      y_train[i] = labels[index]
+  for i,index in enumerate(test_speakers_indices):
+      y_test[i] = labels[index]
 
   return X_train, X_test, y_train, y_test
+
+
+
+# Defining a function for hyperparameter tuning and getting the accuracy on the test set
+
+def get_hyperparams(X_train, X_test, y_train, y_test, classifier, parameters):
+  '''
+  Splits into training and testing set with different speakers
+
+  Parameters
+  ------------
+  X_train: torch tensor
+    The normalised embeddings that will be used for training
+  X_test: torch tensor
+    The normalised embeddings that will be used for testing
+  y_train: list
+    The labels that will be used for training
+  y_test: list
+    The labels that will be used for testing
+  classifier: object
+    The instance of the classification model 
+  parameters: dictionary
+    The dictionary of parameters for GridSearchCV 
+
+  Returns
+  ------------
+    The dictionary of the best hyperparameters
+  
+  '''
+  grid = GridSearchCV(classifier, param_grid = parameters, cv=5, scoring='recall_macro')                     
+  grid.fit(X_train,y_train)
+  print('Accuracy :',grid.best_score_)
+  print('Best Parameters: {}'.format(grid.best_params_))
+  print('Accuracy on test_set: {}'.format(grid.score(X_test, y_test)))
+  return grid.score(X_test, y_test)
