@@ -14,6 +14,15 @@ Identifying emotions from speech using self supervised learning
 - <a href="https://github.com/CheyneyComputerScience/CREMA-D">Crowd Sourced Emotional Multimodal Actors Dataset (CREMA-D)</a>
 - <a href="http://kahlan.eps.surrey.ac.uk/savee/Database.html">Surrey Audio-Visual Expressed Emotion (SAVEE)</a>
 
+## Results
+The recall_macro (%) on different datasets for logistic regression
+|Model            | EmoDB | CaFE | ShEMO | CREMA-D | RAVDESS | SAVEE |
+|-----------------|-------|------|-------|---------|---------|-------|
+|Hybrid BYOL-S    |86.7   |73.4  |55.9   |73.9	   |79.0     |52.9   |
+|OpenSMILE compare|82.8   |68.7  |52.0   |70.5	   |70.1	   |63.8   |
+|OpenSMILE egemaps|75.6   |61.1  |50.2	 |61.0	   |63.2	   |65.2   |
+
+
 ## References
 - https://arxiv.org/abs/2110.03414
 
